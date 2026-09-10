@@ -1,1 +1,16 @@
-numpy\npandas\nscikit-learn\ntransformers\ntorch\nmatplotlib\nseaborn\nwordcloud\nkagglehub\ntqdm
+numpy
+pandas
+scikit-learn
+transformers
+torch
+matplotlib
+seaborn
+wordcloud
+kagglehub
+tqdm
+pydantic
+fastapi
+uvicorn
+pytest
+httpx
+streamlit
