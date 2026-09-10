@@ -148,3 +148,32 @@ def sample_stream(
         "mode": mode,
         "items": items,
     }
+
+
+@app.get("/api/v1/meta", tags=["Observability"])
+def get_metadata():
+    """Returns engine configuration, architecture, and available modalities."""
+    p = get_predictor()
+    return {
+        "project": "TwitterSentiment-Bridge",
+        "architecture": "Hybrid Gated Cascade (Linear Baseline + Transformer)",
+        "models": {
+            "baseline": {
+                "name": "TF-IDF Logistic Regression",
+                "vocabulary_size": 10000,
+                "ngrams": [1, 2],
+                "source": "Sentiment140",
+                "loaded": p.baseline is not None,
+            },
+            "transformer": {
+                "name": "cardiffnlp/twitter-roberta-base-sentiment-latest",
+                "classes": ["negative", "neutral", "positive"],
+                "parameters": "125M",
+                "loaded": p._hf_model is not None,
+            },
+        },
+        "default_confidence_threshold": p.confidence_threshold,
+        "supported_modes": ["hybrid", "fast", "accurate", "ensemble"],
+        "streaming_topics": ["tech", "crypto", "aviation", "ecommerce"],
+    }
+
