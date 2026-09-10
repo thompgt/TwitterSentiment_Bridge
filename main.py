@@ -12,6 +12,14 @@ import time
 from typing import Any, Dict, List, Optional
 import joblib
 
+# Ensure UTF-8 stdout/stderr on Windows
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Ensure src is in search path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "src")))
 from preprocess import clean_for_baseline, clean_for_transformer
@@ -83,11 +91,9 @@ class HybridSentimentPredictor:
         if not self.baseline:
             raise RuntimeError("Baseline model is not loaded.")
 
-        # Baseline outputs binary probabilities [neg_prob, pos_prob]
         probs = self.baseline.predict_proba([cleaned])[0]
         neg_prob, pos_prob = float(probs[0]), float(probs[1])
 
-        # Map binary into 3-class structure
         margin = abs(pos_prob - neg_prob)
         neutral_prob = max(0.0, 1.0 - (margin * 1.5))
         remainder = max(0.0, 1.0 - neutral_prob)
@@ -136,17 +142,7 @@ class HybridSentimentPredictor:
         mode: str = "hybrid",
         confidence_threshold: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Analyze sentiment of a single tweet.
-
-        Args:
-            text: Raw input tweet.
-            mode: One of 'hybrid' (confidence-gated), 'fast' (baseline only),
-                  'accurate' (RoBERTa only), or 'ensemble' (probability blend).
-            confidence_threshold: Optional override for gating threshold.
-
-        Returns:
-            Dictionary with label, score, probabilities, model_used, and latency.
-        """
+        """Analyze sentiment of a single tweet."""
         threshold = confidence_threshold or self.confidence_threshold
         mode = mode.lower()
         t_start = time.perf_counter()
@@ -216,13 +212,11 @@ class HybridSentimentPredictor:
         if self.baseline:
             base_res = self._predict_baseline(text)
             if base_res["score"] >= threshold or not self.enable_transformer:
-                # High confidence -> accept lightweight baseline
                 base_res["text"] = text
                 base_res["mode"] = "hybrid"
                 base_res["routing_reason"] = f"baseline_confident (score {base_res['score']} >= {threshold})"
                 return base_res
 
-            # Ambiguous or weak confidence -> escalate to Transformer
             if self.hf_model:
                 try:
                     tf_res = self._predict_transformer(text)
@@ -239,7 +233,6 @@ class HybridSentimentPredictor:
                     base_res["routing_reason"] = "transformer_exception_fallback"
                     return base_res
             else:
-                # Transformer failed or not enabled -> accept baseline
                 base_res["text"] = text
                 base_res["mode"] = "hybrid"
                 base_res["routing_reason"] = "transformer_unavailable_baseline_accepted"
@@ -273,6 +266,50 @@ class HybridSentimentPredictor:
         return [self.predict(t, mode=mode, confidence_threshold=confidence_threshold) for t in texts]
 
 
+def run_streaming_cli(predictor: HybridSentimentPredictor, topic: str, count: Optional[int], mode: str):
+    """Run real-time streaming simulation in CLI."""
+    from stream_simulator import SocialStreamSimulator
+
+    simulator = SocialStreamSimulator(default_topic=topic)
+    print("=" * 75)
+    print(f"  TwitterSentiment-Bridge Real-Time Stream Monitor 📡")
+    print(f"  Topic: {topic.upper()} | Mode: {mode.upper()} | Limit: {count or 'Infinite'}")
+    print("  Press Ctrl+C to stop streaming.")
+    print("=" * 75)
+
+    pos_count = 0
+    neg_count = 0
+    neu_count = 0
+    total = 0
+
+    try:
+        for tweet in simulator.stream(topic=topic, max_items=count, interval_seconds=0.7):
+            total += 1
+            pred = predictor.predict(tweet["text"], mode=mode)
+            lbl = pred["label"].upper()
+
+            if lbl == "POSITIVE":
+                pos_count += 1
+                icon = "🟢 POS"
+            elif lbl == "NEGATIVE":
+                neg_count += 1
+                icon = "🔴 NEG"
+            else:
+                neu_count += 1
+                icon = "🟡 NEU"
+
+            pos_pct = round((pos_count / total) * 100, 1)
+            neg_pct = round((neg_count / total) * 100, 1)
+
+            print(f"[{tweet['timestamp'][11:19]}] {icon} ({pred['score']:.2f}) | {tweet['handle']}: {tweet['text']}")
+            print(f"    ↳ Engine: {pred['model_used']} | Latency: {pred['latency_ms']}ms | Live Sentiment: {pos_pct}% Pos, {neg_pct}% Neg\n")
+
+    except KeyboardInterrupt:
+        print("\nStream halted by user.")
+
+    print(f"\nFinal Stream Totals: {total} tweets (Pos: {pos_count}, Neg: {neg_count}, Neu: {neu_count})")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="TwitterSentiment-Bridge: Hybrid RoBERTa + TF-IDF Sentiment Predictor"
@@ -300,11 +337,69 @@ def main():
         action="store_true",
         help="Start an interactive sentiment REPL.",
     )
+    parser.add_argument(
+        "--batch",
+        type=str,
+        help="Path to CSV, JSON, or TXT file to process in batch mode.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="Destination path for batch results (CSV or JSON).",
+    )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Launch simulated real-time streaming feed monitor.",
+    )
+    parser.add_argument(
+        "--topic",
+        choices=["tech", "crypto", "aviation", "ecommerce"],
+        default="tech",
+        help="Topic domain for simulated social stream (default: tech).",
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        help="Number of tweets to process in stream mode (default: infinite).",
+    )
 
     args = parser.parse_args()
 
     predictor = HybridSentimentPredictor(confidence_threshold=args.threshold)
 
+    # 1. Stream Mode
+    if args.stream:
+        run_streaming_cli(predictor, topic=args.topic, count=args.count, mode=args.mode)
+        return
+
+    # 2. Batch Mode
+    if args.batch:
+        from batch_processor import BatchSentimentProcessor
+
+        processor = BatchSentimentProcessor(predictor=predictor)
+        out = processor.process_file(args.batch, output_file=args.output, mode=args.mode)
+        if args.json:
+            print(json.dumps(out["summary"], indent=2))
+        else:
+            s = out["summary"]
+            print("\n" + "=" * 60)
+            print("         BATCH PROCESSING SUMMARY")
+            print("=" * 60)
+            print(f"Total Tweets:      {s['total_processed']}")
+            print(f"Total Time:        {s['total_time_sec']} s")
+            print(f"Throughput:        {s['throughput_tweets_per_sec']} tweets/sec")
+            print(f"Average Latency:   {s['average_latency_ms']} ms")
+            print(f"Average Conf:      {s['average_confidence']:.4f}")
+            print(f"Sentiment Split:   {s['sentiment_distribution']}")
+            print(f"Model Routing:     {s['model_routing_breakdown']}")
+            if args.output:
+                print(f"Results Saved To:  {args.output}")
+            print("=" * 60 + "\n")
+        return
+
+    # 3. Interactive Shell
     if args.interactive or (not args.text and len(sys.argv) == 1):
         print("=" * 65)
         print("  TwitterSentiment-Bridge Interactive Shell 🐦")
@@ -336,6 +431,7 @@ def main():
                 break
         return
 
+    # 4. Single-shot prediction
     text = args.text or "This project is really helpful for learning NLP!"
     res = predictor.predict(text, mode=args.mode)
     if args.json:
