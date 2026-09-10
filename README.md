@@ -1,12 +1,106 @@
 # TwitterSentiment-Bridge 🐦
 
-A hybrid sentiment analysis project combining Hugging Face RoBERTa and TF-IDF Logistic Regression.
+A hybrid sentiment analysis project that "bridges" a heavyweight Hugging Face
+RoBERTa transformer with a lightweight TF-IDF + Logistic Regression baseline,
+so predictions keep working even when the transformer model is unavailable.
 
-## Tech Stack
+## How the hybrid approach works
 
-![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Hugging Face Transformers](https://img.shields.io/badge/Hugging%20Face%20Transformers-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)
-![RoBERTa](https://img.shields.io/badge/RoBERTa-5A2D82?style=for-the-badge)
-![Sentiment Analysis](https://img.shields.io/badge/Sentiment%20Analysis-0B7261?style=for-the-badge)
-![TF--IDF](https://img.shields.io/badge/TF--IDF-B23A48?style=for-the-badge)
-![scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?style=for-the-badge&logo=scikitlearn&logoColor=white)
+The two models are not ensembled or averaged together — they're combined as a
+**primary/fallback pair**, implemented in `main.py`'s `HybridSentimentPredictor`:
+
+1. **Power Layer (primary):** `src/hf_model.py` wraps the Hugging Face
+   `sentiment-analysis` pipeline using the pretrained
+   [`cardiffnlp/twitter-roberta-base-sentiment-latest`](https://huggingface.co/cardiffnlp/twitter-roberta-base-sentiment-latest)
+   RoBERTa model (CPU inference), which classifies text as `negative`,
+   `neutral`, or `positive`. This is tried first for every prediction.
+2. **Reliability Layer (fallback):** If the transformer isn't loaded, or the
+   prediction call raises an exception, the predictor falls back to a
+   locally-trained TF-IDF + Logistic Regression pipeline
+   (`models/baseline_lr.pkl`, produced by `src/train_baseline.py`), which
+   classifies text as `positive`/`negative`.
+
+Both paths run the same text cleaning step (`src/preprocess.py`) — stripping
+URLs, `@mentions`, `#` characters, and punctuation, then lowercasing — before
+prediction. The result string is tagged with which model produced it
+(`[HuggingFace]` or `[Baseline-Fallback]`), so the source of a given
+prediction is always clear.
+
+## Project structure
+
+```
+.
+├── main.py                  # HybridSentimentPredictor: RoBERTa-first, LogReg-fallback inference
+├── generate_eda.py          # Script that generates notebooks/eda.ipynb
+├── notebooks/
+│   └── eda.ipynb            # Exploratory data analysis (class balance, tweet length distributions)
+├── src/
+│   ├── data_loader.py       # Downloads/loads the Sentiment140 dataset via kagglehub
+│   ├── preprocess.py        # clean_tweet(): URL/mention/hashtag/punctuation stripping + lowercasing
+│   ├── hf_model.py          # TwitterSentimentTransformer: Hugging Face RoBERTa wrapper
+│   └── train_baseline.py    # Trains and saves the TF-IDF + LogisticRegression baseline
+└── requirements.txt
+```
+
+## Data
+
+Models are trained/evaluated on the
+[Sentiment140](https://www.kaggle.com/datasets/kazanova/sentiment140) dataset
+(1.6M labeled tweets, downloaded automatically via `kagglehub`). Labels are
+remapped from the raw `0`/`4` targets to `0` (negative) / `1` (positive).
+`train_baseline.py` samples 100,000 tweets for training to keep baseline
+training fast.
+
+## Tech stack
+
+- **Modeling:** `transformers` + `torch` (RoBERTa), `scikit-learn` (TF-IDF +
+  Logistic Regression)
+- **Data:** `pandas`, `numpy`, `kagglehub`
+- **EDA/visualization:** `matplotlib`, `seaborn`, `wordcloud`
+- **Persistence:** `joblib`
+- Misc: `tqdm`
+
+See `requirements.txt` for the full dependency list.
+
+## Setup
+
+```bash
+git clone https://github.com/thompgt/TwitterSentiment_Bridge.git
+cd TwitterSentiment_Bridge
+pip install -r requirements.txt
+```
+
+Downloading the Sentiment140 dataset via `kagglehub` requires a configured
+Kaggle account/API credentials.
+
+## Usage
+
+### 1. Train the baseline model
+
+```bash
+python src/train_baseline.py
+```
+
+This downloads the Sentiment140 dataset, samples 100k tweets, cleans them,
+trains a `TfidfVectorizer` (unigrams + bigrams, 10,000 features) +
+`LogisticRegression` pipeline, prints the held-out accuracy, and saves the
+model to `models/baseline_lr.pkl`.
+
+### 2. Run the hybrid predictor
+
+```bash
+python main.py
+```
+
+This loads the baseline model (if present) and the Hugging Face RoBERTa
+model, prompts for a tweet, and prints a sentiment prediction — using
+RoBERTa when available and falling back to the baseline otherwise.
+
+### 3. (Optional) Regenerate the EDA notebook
+
+```bash
+python generate_eda.py
+```
+
+Regenerates `notebooks/eda.ipynb`, which visualizes sentiment class balance
+and tweet-length distributions from a sample of the dataset.
