@@ -122,9 +122,9 @@ def predict_batch(payload: BatchPredictRequest):
 
 @app.get("/api/v1/stream/sample", tags=["Streaming"])
 def sample_stream(
-    topic: str = Query("tech", regex="^(tech|crypto|aviation|ecommerce)$"),
+    topic: str = Query("tech", pattern="^(tech|crypto|aviation|ecommerce)$"),
     count: int = Query(5, ge=1, le=50),
-    mode: str = Query("hybrid", regex="^(hybrid|fast|accurate|ensemble)$"),
+    mode: str = Query("hybrid", pattern="^(hybrid|fast|accurate|ensemble)$"),
 ):
     """Generate a stream sample with live sentiment labels."""
     global stream_simulator
